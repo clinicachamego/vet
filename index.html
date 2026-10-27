@@ -2341,23 +2341,36 @@
   }
 
   async function seedDbIfEmpty() {
-    var snap = await dbApi.collection("chamego_people").limit(1).get();
-    if (!snap.empty) return;
-    var seed = null;
-    try {
-      var raw = localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (raw) { var loc = JSON.parse(raw); if (loc && Array.isArray(loc.people) && (loc.people.length || (loc.tasks || []).length)) seed = loc; }
-    } catch (e) { }
-    if (!seed) return;
-    ["people","categories","tasks","mural"].forEach(function (k) { if (!Array.isArray(seed[k])) seed[k] = []; });
-    var writes = [];
-    seed.people.forEach(function (p) { writes.push(dbApi.collection("chamego_people").doc(p.id).set({ name: p.name, whatsapp: p.whatsapp || "" })); });
-    seed.categories.forEach(function (c) { writes.push(dbApi.collection("chamego_categories").doc(c.id).set({ name: c.name })); });
-    seed.tasks.forEach(function (t) {
-      writes.push(dbApi.collection("chamego_tasks").doc(t.id).set({ title: t.title, format: t.format, categoryId: t.categoryId, ownerId: t.ownerId, priority: t.priority, prodDate: t.prodDate, postDate: t.postDate, stage: t.stage, notes: t.notes }));
-    });
-    seed.mural.forEach(function (m) { writes.push(dbApi.collection("chamego_mural").doc(m.id).set({ authorId: m.authorId, message: m.message, createdAt: m.createdAt })); });
-    await Promise.all(writes);
+    // envia para o Firebase o que está salvo neste aparelho, sem apagar nada que já esteja lá
+    var FLAG = "fb_migrado_v2";
+    try { if (localStorage.getItem(FLAG)) return; } catch (e) { }
+    var loc = null;
+    try { var raw = localStorage.getItem(LOCAL_STORAGE_KEY); if (raw) loc = JSON.parse(raw); } catch (e) { }
+    if (!loc) { try { localStorage.setItem(FLAG, "1"); } catch (e) { } return; }
+    var S = function (v) { return v == null ? "" : v; };
+    var shape = {
+      people: function (p) { return { name: S(p.name), whatsapp: S(p.whatsapp) }; },
+      categories: function (c) { return { name: S(c.name) }; },
+      tasks: function (t) { return { title: S(t.title), format: S(t.format) || "imagem", categoryId: S(t.categoryId), ownerId: S(t.ownerId), priority: S(t.priority) || "Média", prodDate: S(t.prodDate), postDate: S(t.postDate), stage: S(t.stage) || "Backlog", notes: S(t.notes) }; },
+      mural: function (m) { return { authorId: S(m.authorId), message: S(m.message), createdAt: S(m.createdAt) || new Date().toISOString() }; }
+    };
+    var keys = ["people", "categories", "tasks", "mural"];
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i], items = Array.isArray(loc[k]) ? loc[k] : [];
+      if (!items.length) continue;
+      var col = dbApi.collection("chamego_" + k);
+      var existing = {};
+      (await col.get()).docs.forEach(function (d) { existing[d.id] = true; });
+      var batch = dbApi.batch(), ops = 0;
+      for (var j = 0; j < items.length; j++) {
+        var it = items[j];
+        if (!it || !it.id || existing[it.id]) continue;
+        batch.set(col.doc(String(it.id)), shape[k](it)); ops++;
+        if (ops >= 400) { await batch.commit(); batch = dbApi.batch(); ops = 0; }
+      }
+      if (ops) await batch.commit();
+    }
+    try { localStorage.setItem(FLAG, "1"); } catch (e) { }
   }
 
   function subscribeDb() {
@@ -2377,12 +2390,13 @@
   };
   async function startFirestore() {
     dbApi = firebase.firestore();
+    try { dbApi.settings({ ignoreUndefinedProperties: true }); } catch (e) { }
     usingDb = true; setSyncStatus("synced");
     try { await seedDbIfEmpty(); subscribeDb(); }
     catch (e) {
       console.error(e);
       usingDb = false; setSyncStatus("local");
-      var t = document.getElementById("syncStatusText"); if (t) t.textContent = "Sem acesso ao banco: confira as regras do Firebase";
+      var t = document.getElementById("syncStatusText"); if (t) t.textContent = (e && e.code === "permission-denied") ? "Sem acesso ao banco: confira as regras do Firebase" : "Erro ao sincronizar (" + ((e && (e.code || e.message)) || "desconhecido") + ")";
       seedLocal(); renderCurrentTab();
     }
   }
