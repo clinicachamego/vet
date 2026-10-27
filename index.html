@@ -2360,7 +2360,7 @@
       if (!items.length) continue;
       var col = dbApi.collection("chamego_" + k);
       var existing = {};
-      (await col.get()).docs.forEach(function (d) { existing[d.id] = true; });
+      try { (await col.get()).docs.forEach(function (d) { existing[d.id] = true; }); } catch (err) { err.__op = "leitura de " + k; throw err; }
       var batch = dbApi.batch(), ops = 0;
       for (var j = 0; j < items.length; j++) {
         var it = items[j];
@@ -2368,7 +2368,7 @@
         batch.set(col.doc(String(it.id)), shape[k](it)); ops++;
         if (ops >= 400) { await batch.commit(); batch = dbApi.batch(); ops = 0; }
       }
-      if (ops) await batch.commit();
+      if (ops) { try { await batch.commit(); } catch (err) { err.__op = "gravação de " + k; throw err; } }
     }
     try { localStorage.setItem(FLAG, "1"); } catch (e) { }
   }
@@ -2396,7 +2396,7 @@
     catch (e) {
       console.error(e);
       usingDb = false; setSyncStatus("local");
-      var t = document.getElementById("syncStatusText"); if (t) t.textContent = (e && e.code === "permission-denied") ? "Sem acesso ao banco: confira as regras do Firebase" : "Erro ao sincronizar (" + ((e && (e.code || e.message)) || "desconhecido") + ")";
+      var t = document.getElementById("syncStatusText"); if (t) t.textContent = (e && e.code === "permission-denied") ? "Sem acesso ao banco para " + ((firebase.auth().currentUser && firebase.auth().currentUser.email) || "este login") + " (" + (e.__op || "leitura") + ")" : "Erro ao sincronizar (" + ((e && (e.code || e.message)) || "desconhecido") + ")";
       seedLocal(); renderCurrentTab();
     }
   }
